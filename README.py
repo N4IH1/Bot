@@ -9,10 +9,10 @@ from telegram.ext import (
 )
 
 # ========= إعدادات عامة =========
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_NEW_SECURE_TOKEN_HERE")  # ضع التوكن الجديد الآمن هنا
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8465165595:AAE91ipzTJBaQk9UQeboM72UV3c8mtNPHp4")  # ضع التوكن الجديد الآمن هنا
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6005239475"))
 LOGO_PATH = os.getenv("LOGO_PATH", "logo.jpg")
-ADMIN_INVITE_LINK = os.getenv("ADMIN_INVITE_LINK", "https://t.me/YourPrivateGroupOrChannelLink")  # رابط جروب/قناة بعد القبول
+ADMIN_INVITE_LINK = os.getenv("ADMIN_INVITE_LINK", "https://t.me/+O4ltDsSroClmNGRi")  # رابط جروب/قناة بعد القبول
 
 # ========= تسجيل =========
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
