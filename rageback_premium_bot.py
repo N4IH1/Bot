@@ -9,18 +9,18 @@ from telegram.ext import (
 )
 
 # ========= إعدادات عامة =========
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8465165595:AAE91ipzTJBaQk9UQeboM72UV3c8mtNPHp4")  # ضع التوكن الجديد الآمن هنا
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8465165595:AAE91ipzTJBaQk9UQeboM72UV3c8mtNPHp4")  
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6005239475"))
 LOGO_PATH = os.getenv("LOGO_PATH", "logo.jpg")
-ADMIN_INVITE_LINK = os.getenv("ADMIN_INVITE_LINK", "https://t.me/+O4ltDsSroClmNGRi")  # رابط جروب/قناة بعد القبول
+ADMIN_INVITE_LINK = os.getenv("ADMIN_INVITE_LINK", "https://t.me/+O4ltDsSroClmNGRi")  
 
 # ========= تسجيل =========
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ========= حالات المحادثة (تقديم) =========
+# ========= حالات المحادثة =========
 (NAME, IGN, IDGAME, AGE, ACC_LEVEL, REGION, RANK, EXP, CONFIRM) = range(9)
 
-# ========= نصوص الهوية =========
+# ========= نصوص =========
 WELCOME_CAPTION = (
     "🔥✨ أهلاً وسهلاً بك في *RAGEBACK ESPORT* ✨🔥\n\n"
     "🏆 حيثُ نصنع الأساطير ولا نبحث عنها.\n"
@@ -30,7 +30,6 @@ WELCOME_CAPTION = (
     "🚀 المستقبل يبدأ من هنا... مع *RAGEBACK*!"
 )
 
-# القوانين مقسّمة صفحات
 RULES_PAGES = [
     "📖 *قوانين RAGEBACK — 1/3*\n\n"
     "1️⃣ العمر لا يقل عن 16 سنة.\n"
@@ -57,7 +56,7 @@ APPLY_INTRO = (
 
 CONTACT_TEXT = "📩 للتواصل مع الإدارة: @YourContactHere"
 
-# ========= مساعدات واجهة =========
+# ========= كيبورد =========
 def kb_main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📖 القوانين", callback_data="rules:1")],
@@ -95,7 +94,7 @@ def kb_admin_actions(user_id: int):
          InlineKeyboardButton("❌ رفض", callback_data=f"admin:reject:{user_id}")]
     ])
 
-# ========= أوامر القائمة (Menu) =========
+# ========= post_init =========
 async def post_init(application: Application):
     commands = [
         BotCommand("start", "ابدأ | Start"),
@@ -106,14 +105,14 @@ async def post_init(application: Application):
     ]
     await application.bot.set_my_commands(commands)
 
-# ========= Handlers أساسية =========
+# ========= أوامر =========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """رسالة البداية مع اللوغو وزر انطلق فقط"""
     if update.message:
         if os.path.exists(LOGO_PATH):
             with open(LOGO_PATH, "rb") as photo:
                 await update.message.reply_photo(
-                    photo=photo, caption=WELCOME_CAPTION, parse_mode="Markdown",
-                    reply_markup=kb_start()
+                    photo=photo, caption=WELCOME_CAPTION, parse_mode="Markdown", reply_markup=kb_start()
                 )
         else:
             await update.message.reply_text(WELCOME_CAPTION, parse_mode="Markdown", reply_markup=kb_start())
@@ -129,22 +128,23 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(CONTACT_TEXT)
 
-# ========= القوانين (تبديل صفحات + رجوع) =========
+# ========= القوانين =========
 async def cb_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    data = q.data  # e.g., rules:2
-    page = int(data.split(":")[1])
+    page = int(q.data.split(":")[1])
     page = max(1, min(page, len(RULES_PAGES)))
     await q.message.reply_text(RULES_PAGES[page-1], parse_mode="Markdown", reply_markup=kb_rules_nav(page))
 
 async def cb_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    # رجوع للقائمة الرئيسية
     await q.message.reply_text("عدنا للقائمة الرئيسية:", reply_markup=kb_main_menu())
 
-# ========= محادثة التقديم (Premium) =========
+# ========= محادثة التقديم =========
+def is_int(text: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,3}", text.strip()))
+
 async def cmd_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(APPLY_INTRO, parse_mode="Markdown")
     return NAME
@@ -154,9 +154,6 @@ async def cb_apply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     await q.message.reply_text(APPLY_INTRO, parse_mode="Markdown")
     return NAME
-
-def is_int(text: str) -> bool:
-    return bool(re.fullmatch(r"\d{1,3}", text.strip()))
 
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
@@ -180,7 +177,6 @@ async def ask_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGE
     age = int(age_txt)
     context.user_data["age"] = age
-
     if age < 16:
         await update.message.reply_text("⚠️ الحد الأدنى للعمر 16 سنة. إن كنت قريبًا من السن المطلوب يمكنك الاستمرار وسيتم تقييم حالتك.")
     await update.message.reply_text("📈 ما هو *مستوى حسابك*؟ (أرقام فقط)", parse_mode="Markdown")
@@ -193,7 +189,6 @@ async def ask_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ACC_LEVEL
     lvl = int(lvl_txt)
     context.user_data["level"] = lvl
-
     if lvl < 50:
         await update.message.reply_text("⚠️ الحد الأدنى للمستوى 50. يمكنك الاستمرار وسيتم تقييم طلبك.")
     await update.message.reply_text("🌍 من أي *دولة/منطقة* أنت؟", parse_mode="Markdown")
@@ -234,7 +229,6 @@ async def finalize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "send":
         d = context.user_data
         user = q.from_user
-        # رسالة للأدمن مع أزرار قبول/رفض
         admin_msg = (
             "📥 *طلب انضمام جديد*\n\n"
             f"👤 الاسم: {d['name']}\n"
@@ -247,14 +241,14 @@ async def finalize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏆 الخبرات: {d['exp']}\n\n"
             f"من: @{user.username or user.id}"
         )
-        await q.message.reply_text("✅ تم إرسال طلبك وهو *قيد المراجعة* الآن. سنبلغك بالقرار قريبًا.", parse_mode="Markdown")
+        await q.message.reply_text("✅ تم إرسال طلبك وهو *قيد المراجعة* الآن.", parse_mode="Markdown")
         await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_msg, parse_mode="Markdown", reply_markup=kb_admin_actions(user.id))
     else:
         await q.message.reply_text("❌ تم إلغاء التقديم.")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========= قرارات الأدمن (قبول/رفض) =========
+# ========= قرارات الأدمن =========
 async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -262,29 +256,20 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = int(uid_str)
 
     if action == "accept":
-        # رسالة للمتقدّم + رابط
         await context.bot.send_message(
             chat_id=user_id,
-            text=(
-                "🎉 مبروك! تم *قبول* طلبك في RAGEBACK ESPORT.\n"
-                f"انضم عبر الرابط: {ADMIN_INVITE_LINK}"
-            ),
+            text="🎉 مبروك! تم *قبول* طلبك.\n"
+                 f"انضم عبر الرابط: {ADMIN_INVITE_LINK}",
             parse_mode="Markdown"
         )
         await q.message.reply_text("✅ تم قبول اللاعب وإرسال الدعوة.")
     elif action == "reject":
         await context.bot.send_message(
             chat_id=user_id,
-            text="❌ نعتذر، تم *رفض* طلبك حاليًا. نتمنى لك التوفيق ويمكنك التقديم لاحقًا.",
+            text="❌ نعتذر، تم *رفض* طلبك حالياً.",
             parse_mode="Markdown"
         )
         await q.message.reply_text("❌ تم رفض اللاعب.")
-
-# ========= رجوع/منيو/تواصل =========
-async def cb_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    await q.message.reply_text(CONTACT_TEXT)
 
 # ========= /cancel =========
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,18 +280,18 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # الأوامر (تظهر في زر القائمة Menu)
+    # أوامر
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("rules", cmd_rules))
     app.add_handler(CommandHandler("apply", cmd_apply))
     app.add_handler(CommandHandler("contact", cmd_contact))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
-    # أزرار عامة
+    # أزرار
     app.add_handler(CallbackQueryHandler(cb_open_menu, pattern="^open_menu$"))
     app.add_handler(CallbackQueryHandler(cb_rules, pattern=r"^rules:\d+$"))
     app.add_handler(CallbackQueryHandler(cb_back, pattern="^back$"))
-    app.add_handler(CallbackQueryHandler(cb_contact, pattern="^contact$"))
+    app.add_handler(CallbackQueryHandler(cmd_contact, pattern="^contact$"))
 
     # محادثة التقديم
     conv = ConversationHandler(
