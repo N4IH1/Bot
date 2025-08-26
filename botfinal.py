@@ -22,7 +22,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8001395532:AAE4X5EdQ4whYdNdnt00fCeeb8g9aDCKH
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6005239475"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@RAGEBACKESPORT")
 LOGO_PATH = os.getenv("LOGO_PATH", "logo.jpg")
-MAX_TEAMS = int(os.getenv("MAX_TEAMS", "25"))
+MAX_TEAMS = int(os.getenv("MAX_TEAMS", "20"))
 
 STICKER_WELCOME = os.getenv("STICKER_WELCOME", "")
 STICKER_ADMIN = os.getenv("STICKER_ADMIN", "")
