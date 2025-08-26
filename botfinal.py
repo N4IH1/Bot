@@ -24,7 +24,7 @@ from telegram.ext import (
 # ==============================
 # الإعدادات
 # ==============================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")  
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8001395532:AAE4X5EdQ4whYdNdnt00fCeeb8g9aDCKHqU")  
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6005239475"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@RAGEBACKESPORT")  
 LOGO_PATH = os.getenv("LOGO_PATH", "logo.jpg")
