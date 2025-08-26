@@ -1,8 +1,10 @@
-# botfinal_complete_fixed.py
+# botfinal.py
 import os
 import json
 import logging
+from collections import deque
 from typing import Dict, Any, List
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -16,7 +18,7 @@ from telegram.ext import (
 )
 
 # ==============================
-# إعدادات
+# إعدادات (غيّر حسب حاجتك)
 # ==============================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8001395532:AAE4X5EdQ4whYdNdnt00fCeeb8g9aDCKHqU")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6005239475"))
@@ -24,27 +26,32 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@RAGEBACKESPORT")
 LOGO_PATH = os.getenv("LOGO_PATH", "logo.jpg")
 MAX_TEAMS = int(os.getenv("MAX_TEAMS", "20"))
 
-STICKER_WELCOME = os.getenv("STICKER_WELCOME", "")
-STICKER_ADMIN = os.getenv("STICKER_ADMIN", "")
+STICKER_WELCOME = os.getenv("STICKER_WELCOME", "")  # اختياري
+STICKER_ADMIN = os.getenv("STICKER_ADMIN", "")      # اختياري
 
 DATA_FILE = os.getenv("DATA_FILE", "bot_data.json")
 
-# بيانات البوت
-teams: List[Dict[str, Any]] = []
+# ==============================
+# بيانات التشغيل (ذاكرة)
+# ==============================
+teams: List[Dict[str, Any]] = []          # القوائم النهائية
 pending_payments: Dict[str, Dict[str, Any]] = {}   # user_id -> {type, card, username}
-wallet_collecting: Dict[str, Dict[str, Any]] = {}  # user_id -> {"stage": "wallet"/"number", "wallet": ...}
-collecting: Dict[str, Dict[str, Any]] = {}         # user_id -> clan collection after admin accept
+wallet_collecting: Dict[str, Dict[str, Any]] = {}  # user_id -> {"stage":"number","wallet":..}
+collecting: Dict[str, Dict[str, Any]] = {}         # user_id -> clan/tag/country after admin accept
 is_open: bool = False
 
 # Conversation states
 PROOF = 0
 
-# لوغ
+# لتجنب معالجة نفس callback عدة مرات
+SEEN_CALLBACK_IDS = deque(maxlen=2000)
+
+# سجل
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==============================
-# حفظ / تحميل البيانات
+# حفظ/تحميل بيانات إلى JSON
 # ==============================
 def save_all():
     try:
@@ -58,7 +65,7 @@ def save_all():
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
-        logger.exception("Failed to save data")
+        logger.exception("save_all failed")
 
 def load_all():
     global teams, pending_payments, wallet_collecting, collecting, is_open
@@ -73,10 +80,10 @@ def load_all():
         collecting = data.get("collecting", {})
         is_open = data.get("is_open", False)
     except Exception:
-        logger.exception("Failed to load data")
+        logger.exception("load_all failed")
 
 # ==============================
-# لوحات الأزرار
+# أزرار/لوحات
 # ==============================
 def kb_player_home():
     return InlineKeyboardMarkup([
@@ -94,28 +101,27 @@ def kb_admin_home():
         [InlineKeyboardButton("📣 نشر اللستة الآن", callback_data="admin:publish")]
     ])
 
-def admin_action_buttons(user_id: int):
+def admin_action_buttons(user_id: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ قبول", callback_data=f"admin:accept:{user_id}"),
          InlineKeyboardButton("❌ رفض", callback_data=f"admin:reject:{user_id}")]
     ])
 
 # ==============================
-# نصوص ثابتة
+# نصوص مساعدة
 # ==============================
 WELCOME_PLAYER = (
     "🔥 *أهلًا بيك بـ RAGEBACK ESPORT — Finals Manager* 🔥\n\n"
-    "1) اطّلع على القوانين\n"
-    "2) اضغط تسجيل ثم أرسل نوع الرصيد (زين أو اسيا) ثم رقم البطاقة في رسالة منفصلة\n"
-    "3) بعد قبول الإدارة اكمل بيانات الكلان\n"
+    "1) اضغط التسجيل ثم أرسل نوع الرصيد (زين أو اسيا) ثم رقم البطاقة في رسالة منفصلة.\n"
+    "2) عند قبول الإدارة أكمل بيانات الكلان (الاسم - التاج - إيموجي العلم).\n"
 )
 
 WELCOME_ADMIN = (
     "🛠️ *لوحة تحكم الأدمن — RAGEBACK ESPORT*\n\n"
-    "تحكم بالسجلّات والنشر من هنا."
+    "من هنا تفتح/تقفل التسجيل، تراجع الطلبات، وتنشر اللستة."
 )
 
-RULES_TEXT = lambda: (
+RULES_TEXT = (
     "📜 *قوانين الفاينلات:*\n\n"
     "• الحد الأدنى لمستوى الحساب: *50*\n"
     "• الاحترام واجب — لا سب أو شتم\n"
@@ -136,36 +142,49 @@ def build_pending_preview() -> str:
     if not pending_payments:
         return "لا توجد طلبات دفع معلّقة حالياً."
     lines = []
-    idx = 1
+    i = 1
     for uid, p in pending_payments.items():
         uname = p.get("username") or uid
-        lines.append(f"{idx}) @{uname} — UserID: `{uid}` — نوع: *{p.get('type','?')}* — البطاقة: `{p.get('card','?')}`")
-        idx += 1
+        lines.append(f"{i}) @{uname} — UserID: `{uid}` — نوع: *{p.get('type','?')}* — البطاقة: `{p.get('card','?')}`")
+        i += 1
     return "📥 *الطلبات المعلقة:*\n\n" + "\n".join(lines)
 
 # ==============================
-# أدوات مساعدة
+# أدوات مساعدة: تطبيع نوع الرصيد + التحقق من علم (flag emoji)
 # ==============================
-async def try_send_sticker(context: ContextTypes.DEFAULT_TYPE, chat_id: int, sticker_id: str):
-    if not sticker_id:
-        return
-    try:
-        await context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-    except Exception:
-        pass
-
 def normalize_wallet(txt: str) -> str:
     t = (txt or "").strip().lower().replace(" ", "")
     zain = {"زين", "زينكاش", "zain", "zaincash"}
-    asia = {"اسيا", "آسياسيل", "asiacell", "asia", "asia-sell", "asiasell"}
+    asia = {"اسيا", "آسياسيل", "asiacell", "asia", "asiasell", "asia-cell"}
     if t in zain:
         return "زين"
     if t in asia:
         return "اسيا"
     return ""
 
+def is_flag_emoji(s: str) -> bool:
+    # بسيط: نتحقق إذا الحروف تحتوي على رمز مؤشر إقليمي (Regional Indicator Symbols)
+    if not s:
+        return False
+    for ch in s:
+        code = ord(ch)
+        if 0x1F1E6 <= code <= 0x1F1FF:
+            return True
+    return False
+
 # ==============================
-# أوامر وواجهات المستخدم
+# منع تنفيذ نفس callback أكثر من مرة
+# ==============================
+def seen_callback_already(callback_id: str) -> bool:
+    if not callback_id:
+        return False
+    if callback_id in SEEN_CALLBACK_IDS:
+        return True
+    SEEN_CALLBACK_IDS.append(callback_id)
+    return False
+
+# ==============================
+# أوامر / واجهات
 # ==============================
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -181,18 +200,24 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     photo=InputFile(f),
                     caption=WELCOME_ADMIN if is_admin else WELCOME_PLAYER,
                     parse_mode="Markdown",
-                    reply_markup=kb_admin_home() if is_admin else kb_player_home()
+                    reply_markup=kb_admin_home() if is_admin else kb_player_home(),
                 )
         else:
             await update.message.reply_text(
                 WELCOME_ADMIN if is_admin else WELCOME_PLAYER,
                 parse_mode="Markdown",
-                reply_markup=kb_admin_home() if is_admin else kb_player_home()
+                reply_markup=kb_admin_home() if is_admin else kb_player_home(),
             )
-        await try_send_sticker(context, update.effective_chat.id, STICKER_ADMIN if is_admin else STICKER_WELCOME)
+        # ستيكر ترحيب (اختياري، يتجاهل الخطأ إن لم يكن صالحاً)
+        try:
+            sticker = STICKER_ADMIN if is_admin else STICKER_WELCOME
+            if sticker:
+                await context.bot.send_sticker(chat_id=update.effective_chat.id, sticker=sticker)
+        except Exception:
+            pass
 
 async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(RULES_TEXT(), parse_mode="Markdown")
+    await update.message.reply_text(RULES_TEXT, parse_mode="Markdown")
 
 async def register_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_open
@@ -201,19 +226,19 @@ async def register_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     await update.message.reply_text(
         "🔔 *خطوة تسجيل الرصيد*\n\n"
-        "أرسل الآن نوع الرصيد فقط: *زين* أو *اسيا*.\n"
+        "أرسل الآن نوع الرصيد: *زين* أو *اسيا*.\n"
         "بعدها أرسل رقم البطاقة في رسالة منفصلة.",
         parse_mode="Markdown"
     )
     return PROOF
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"📊 الحالة: {'مفتوح' if is_open else 'مغلق'}\nعدد الفرق: {len(teams)} / {MAX_TEAMS}")
+    await update.message.reply_text(f"📊 الحالة: {'🟢 مفتوح' if is_open else '🔴 مغلق'}\nعدد الفرق: {len(teams)} / {MAX_TEAMS}")
 
 async def my_slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     for e in teams:
-        if e["user_id"] == user.id or str(e["user_id"]) == str(user.id):
+        if int(e["user_id"]) == user.id:
             await update.message.reply_text(f"📍 موقع فريقك: {e['slot']} — {e['clan']} | {e['tag']} | {e['country']}")
             return
     await update.message.reply_text("ℹ️ لم تُسجّل في اللستة الحالية.")
@@ -224,93 +249,106 @@ async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("هذا الأمر مخصّص للأدمن فقط.")
         return
     await update.message.reply_text("لوحة تحكم الأدمن:", reply_markup=kb_admin_home())
-    await try_send_sticker(context, update.effective_chat.id, STICKER_ADMIN)
 
 # ==============================
-# أزرار اللاعب (CallbackQuery)
+# Callback: أزرار اللاعبين
 # ==============================
 async def player_rules_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if seen_callback_already(q.id):
+        await q.answer()
+        return
     await q.answer()
-    await q.edit_message_text(RULES_TEXT(), parse_mode="Markdown")
+    # نعدل الرسالة لتجنب إرسال رسالة جديدة (منع التكرار)
+    try:
+        await q.edit_message_text(RULES_TEXT, parse_mode="Markdown")
+    except Exception:
+        # fallback: إذا لم يكن بالإمكان التعديل (نادر) نرسل reply
+        await q.message.reply_text(RULES_TEXT, parse_mode="Markdown")
 
 async def player_register_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if seen_callback_already(q.id):
+        await q.answer()
+        return ConversationHandler.END
     await q.answer()
     global is_open
     if not is_open:
-        # نعدل الرسالة (لوحة اللاعب) أو نرد
         try:
             await q.edit_message_text("⚠️ التسجيل مغلق الآن. انتظر فتح التسجيل من الإدارة.", reply_markup=kb_player_home())
         except Exception:
             await q.message.reply_text("⚠️ التسجيل مغلق الآن. انتظر فتح التسجيل من الإدارة.")
         return ConversationHandler.END
-    # نبدأ Conversation لالتقاط نوع الرصيد
+    # نعرض رسالة وندخل في Conversation لالتقاط نوع الرصيد
     try:
         await q.edit_message_text(
             "🔔 *خطوة تسجيل الرصيد*\n\n"
-            "أرسل الآن نوع الرصيد فقط: *زين* أو *اسيا*.\n"
+            "أرسل الآن نوع الرصيد: *زين* أو *اسيا*.\n"
             "بعدها أرسل رقم البطاقة في رسالة منفصلة.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
     except Exception:
         await q.message.reply_text(
             "🔔 *خطوة تسجيل الرصيد*\n\n"
-            "أرسل الآن نوع الرصيد فقط: *زين* أو *اسيا*.\n"
+            "أرسل الآن نوع الرصيد: *زين* أو *اسيا*.\n"
             "بعدها أرسل رقم البطاقة في رسالة منفصلة.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
     return PROOF
 
 # ==============================
-# استقبال نوع الرصيد (مراحل: نوع -> رقم)
+# استقبال نوع الرصيد ثم رقم البطاقة (Conversation)
 # ==============================
 async def proof_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global wallet_collecting, pending_payments
+    """Conversation state PROOF: ننتظر أولًا نوع الرصيد ثم رقم البطاقة"""
     user = update.effective_user
     uid = str(user.id)
     text = (update.message.text or "").strip()
 
-    # هل العميل في مرحلة إدخال رقم البطاقة؟
+    # هل المستخدم في مرحلة إدخال رقم البطاقة؟
     stage = wallet_collecting.get(uid, {}).get("stage")
 
     if not stage:
-        # هذه الرسالة متوقعة أن تكون اسم الرصيد
+        # هذه الرسالة يجب أن تكون اسم الرصيد
         wallet = normalize_wallet(text)
         if not wallet:
-            await update.message.reply_text("⚠️ الرجاء إرسال نوع الرصيد الصحيح فقط: زين أو اسيا")
+            await update.message.reply_text("⚠️ الرجاء إرسال نوع الرصيد الصحيح: *زين* أو *اسيا*", parse_mode="Markdown")
             return PROOF
-        # خزن المرحلة واطلب رقم البطاقة
+        # خزن المرحلة وانتظر رقم البطاقة
         wallet_collecting[uid] = {"stage": "number", "wallet": wallet}
         save_all()
-        await update.message.reply_text(f"✳️ نوع الرصيد مسجّل: *{wallet}*\nالآن أرسل رقم البطاقة (في رسالة منفصلة).", parse_mode="Markdown")
+        await update.message.reply_text(f"✳️ تم تسجيل النوع: *{wallet}*.\nالآن أرسل رقم البطاقة (أرقام فقط).", parse_mode="Markdown")
         return PROOF
 
-    # مرحلة استقبال رقم البطاقة
+    # المرحلة: استقبال الرقم
     if stage == "number":
         wallet = wallet_collecting[uid]["wallet"]
-        card_number = text
-        # يمكنك هنا إضافة فلترة على صيغة الرقم إن أردت (أرقام فقط)، لكن تركتها مرنة كما طلبت
+        card = text
+        # تحقق بسيط: أرقام فقط، طول مرن (تقدر تغير الحد الأدنى هنا)
+        if not card.isdigit() or len(card) < 4:
+            await update.message.reply_text("⚠️ رقم البطاقة يجب أن يكون أرقام فقط وطوله على الأقل 4 أرقام. حاول مجددًا.")
+            return PROOF
+
+        # احفظ الطلب المعلق
         pending_payments[uid] = {
             "type": wallet,
-            "card": card_number,
+            "card": card,
             "username": user.username or user.first_name
         }
         # أزل حالة التقاط الرصيد
         wallet_collecting.pop(uid, None)
         save_all()
 
-        # أبلغ المستخدم مباشرة
-        await update.message.reply_text("✅ تم إرسال طلبك للإدارة. انتظر الموافقة.")
+        # أبلغ المستخدم
+        await update.message.reply_text("✅ تم إرسال طلبك للإدارة. انتظر المراجعة.")
 
-        # أرسل للأدمن رسالة واحدة تحتوي النوع والرقم مع أزرار القبول/الرفض
+        # أرسل للأدمن رسالة مفصّلة مع أزرار قبول/رفض
         admin_msg = (
             f"📥 *طلب تسجيل جديد*\n\n"
             f"من: @{user.username or user.first_name}\n"
             f"UserID: `{uid}`\n\n"
             f"نوع الرصيد: *{wallet}*\n"
-            f"رقم البطاقة: `{card_number}`\n\n"
-            f"اضغط قبول أو رفض أسفل."
+            f"رقم البطاقة: `{card}`"
         )
         try:
             await context.bot.send_message(
@@ -320,17 +358,22 @@ async def proof_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_action_buttons(uid)
             )
         except Exception:
-            logger.exception("Failed to notify admin about payment")
+            logger.exception("notify admin failed")
         return ConversationHandler.END
 
 # ==============================
-# أزرار الأدمن (CallbackQuery) — الآن نستخدم edit_message_text لتفادي تكرار
+# Callback: أزرار الأدمن (edit_message_text لتجنب التكرار)
 # ==============================
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    # حماية ضد double callbacks
+    if seen_callback_already(q.id):
+        await q.answer()
+        return
     await q.answer()
     caller = q.from_user
 
+    # فقط الأدمن مسموح
     if caller.id != ADMIN_CHAT_ID:
         try:
             await q.edit_message_text("❌ هذا الزر محجوز للإدارة فقط.")
@@ -338,9 +381,9 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text("❌ هذا الزر محجوز للإدارة فقط.")
         return
 
-    data = q.data
+    data = q.data or ""
     parts = data.split(":")
-    action = parts[1] if len(parts) >= 2 else ""
+    action = parts[1] if len(parts) > 1 else ""
 
     global is_open, pending_payments
 
@@ -363,14 +406,14 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
                 await q.edit_message_text("✅ تم نشر اللستة في القناة.", reply_markup=kb_admin_home())
             except Exception:
-                logger.exception("Failed to publish list to channel")
+                logger.exception("publish failed")
                 await q.edit_message_text("⚠️ خطأ عند نشر اللستة.", reply_markup=kb_admin_home())
             return
 
         if action == "view_pending":
             text = build_pending_preview()
             rows = []
-            for uid in pending_payments.keys():
+            for uid in list(pending_payments.keys()):
                 rows.append([
                     InlineKeyboardButton(f"✅ قبول {uid}", callback_data=f"admin:accept:{uid}"),
                     InlineKeyboardButton(f"❌ رفض {uid}", callback_data=f"admin:reject:{uid}")
@@ -391,45 +434,43 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "back_home":
-            await q.edit_message_text("🏠 الرجوع للوحة الأدمن:", reply_markup=kb_admin_home())
+            await q.edit_message_text("🏠 لوحة الأدمن:", reply_markup=kb_admin_home())
             return
 
         if action in ("accept", "reject") and len(parts) == 3:
-            target_id = parts[2]
-            pending = pending_payments.get(str(target_id))
+            target = parts[2]
+            pending = pending_payments.get(str(target))
             if not pending:
-                await q.edit_message_text("⚠️ لا يوجد طلب معلّق لهذا المستخدم.", reply_markup=kb_admin_home())
+                await q.edit_message_text("⚠️ لا يوجد طلب معلق لهذا المستخدم.", reply_markup=kb_admin_home())
                 return
 
             if action == "reject":
-                # بلغ المستخدم بالرفض
+                # أبلغ المستخدم بالرفض
                 try:
-                    await context.bot.send_message(chat_id=int(target_id),
-                                                   text="❌ تم رفض طلب التسجيل. تأكد من البيانات وحاول مرة أخرى.")
+                    await context.bot.send_message(chat_id=int(target),
+                                                   text="❌ تم رفض طلب التسجيل. تأكد من البيانات وأعد المحاولة.")
                 except Exception:
-                    logger.exception("Failed to send reject message to user")
-                pending_payments.pop(str(target_id), None)
+                    logger.exception("send reject to user failed")
+                pending_payments.pop(str(target), None)
                 save_all()
-                await q.edit_message_text(f"❌ تم رفض طلب UserID: {target_id}.", reply_markup=kb_admin_home())
+                await q.edit_message_text(f"❌ تم رفض طلب UserID: {target}.", reply_markup=kb_admin_home())
                 return
 
-            # قبول: اطلب من المستخدم بيانات الكلان (نبدأ وضع collecting)
+            # قبول الطلب -> نطلب اسم الكلان من المستخدم
             try:
-                await context.bot.send_message(
-                    chat_id=int(target_id),
-                    text="✅ تم قبول الرصيد. الآن أرسل *اسم الكلان الرسمي*.",
-                    parse_mode="Markdown"
-                )
+                await context.bot.send_message(chat_id=int(target),
+                                               text="✅ تم قبول الرصيد. الآن أرسل *اسم الكلان الرسمي*.",
+                                               parse_mode="Markdown")
             except Exception:
-                logger.exception("Failed to send accept message to user")
-            collecting[str(target_id)] = {"stage": "clan"}
-            pending_payments.pop(str(target_id), None)
+                logger.exception("notify user accept failed")
+            collecting[str(target)] = {"stage": "clan"}
+            pending_payments.pop(str(target), None)
             save_all()
-            await q.edit_message_text(f"✅ تم قبول طلب UserID: {target_id}. تم إشعار المستخدم لبدء إدخال بيانات الكلان.", reply_markup=kb_admin_home())
+            await q.edit_message_text(f"✅ تم قبول طلب UserID: {target}. تم إشعار المستخدم لبدء إدخال بيانات الكلان.", reply_markup=kb_admin_home())
             return
 
     except Exception:
-        logger.exception("Error in admin_callback")
+        logger.exception("admin_callback error")
         try:
             await q.edit_message_text("⚠️ حدث خطأ أثناء تنفيذ الأمر.", reply_markup=kb_admin_home())
         except Exception:
@@ -443,42 +484,47 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = str(user.id)
     if uid not in collecting:
-        return
+        return  # لا شيء لنا هنا
 
     stage = collecting[uid].get("stage")
     text = (update.message.text or "").strip()
 
     if stage == "clan":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *اسم الكلان* نصًّا.")
+            await update.message.reply_text("🙁 رجاءً أرسل *اسم الكلان* نصًّا.", parse_mode="Markdown")
             return
         collecting[uid]["clan"] = text
         collecting[uid]["stage"] = "tag"
         save_all()
-        await update.message.reply_text("✳️ تم تسجيل اسم الكلان. الآن أرسل *التاج الرسمي* للفريق.")
+        await update.message.reply_text("✳️ تم تسجيل اسم الكلان. الآن أرسل *التاج (Tag)* للفريق.", parse_mode="Markdown")
         return
 
     if stage == "tag":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *تاج الفريق* نصًّا.")
+            await update.message.reply_text("🙁 رجاءً أرسل *التاج* نصًّا.", parse_mode="Markdown")
             return
         collecting[uid]["tag"] = text
         collecting[uid]["stage"] = "country"
         save_all()
-        await update.message.reply_text("✳️ تم تسجيل التاج. الآن أرسل *إيموجي العلم* للدولة (مثال 🇮🇶).")
+        await update.message.reply_text("✳️ تم تسجيل التاج. الآن أرسل *إيموجي العلم* للدولة (مثال 🇮🇶).", parse_mode="Markdown")
         return
 
     if stage == "country":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *إيموجي العلم* للدولة (مثال 🇮🇶).")
+            await update.message.reply_text("🙁 رجاءً أرسل *إيموجي العلم* للدولة (مثال 🇮🇶).", parse_mode="Markdown")
             return
+        # تحقق أن المستخدم أرسل علم (flag emoji) - شرط اختياري لكن طلبته
+        if not is_flag_emoji(text):
+            await update.message.reply_text("⚠️ الرجاء إرسال إيموجي العلم فقط (مثال 🇮🇶).", parse_mode="Markdown")
+            return
+
         collecting[uid]["country"] = text
 
-        # تحقق المساحة ثم إضافة الفريق
+        # تحقق المساحة
         if len(teams) >= MAX_TEAMS:
             collecting.pop(uid, None)
             save_all()
-            await update.message.reply_text("⚠️ آسف، العدد اكتمل ولا يمكن إضافة فريقك الآن.")
+            await update.message.reply_text("⚠️ تم اكتمال العدد ولا يمكن إضافة فريقك الآن.")
             return
 
         slot = len(teams) + 1
@@ -494,15 +540,17 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         collecting.pop(uid, None)
         save_all()
 
-        await update.message.reply_text(f"✅ تم تسجيل فريقك بنجاح في اللستة. رقم الفريق: {slot}")
-        # أبلغ جميع المسجلين بالقائمة المحدثة
+        await update.message.reply_text(f"✅ تم تسجيل فريقك في اللستة. رقم الفريق: {slot}", parse_mode="Markdown")
+
+        # أبْلِغ الجميع بالقائمة المحدثة
         list_text = build_list_text()
         for e in teams:
             try:
                 await context.bot.send_message(chat_id=e["user_id"], text=list_text, parse_mode="Markdown")
             except Exception:
-                logger.exception(f"Failed to notify user {e['user_id']} about updated list")
-        # إذا اكتمل العدد، أغلق ونشر
+                logger.exception(f"notify user {e['user_id']} failed")
+
+        # إن اكتمل العدد: أغلق وانشر
         if len(teams) >= MAX_TEAMS:
             global is_open
             is_open = False
@@ -511,16 +559,17 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 final_text = "*✅ الاكتفاء: تم إغلاق التسجيل — اللستة النهائية*\n\n" + build_list_text()
                 await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text, parse_mode="Markdown")
             except Exception:
-                logger.exception("Failed to publish final list to channel")
+                logger.exception("publish final failed")
         return
 
 # ==============================
-# تسجيل الهاندلرز وتشغيل البوت
+# تهيئة الـ Handlers وتشغيل البوت
 # ==============================
 def main():
     load_all()
     if not BOT_TOKEN:
         raise RuntimeError("8001395532:AAE4X5EdQ4whYdNdnt00fCeeb8g9aDCKHqU")
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     # أوامر عامة
@@ -531,29 +580,28 @@ def main():
     app.add_handler(CommandHandler("my_slot", my_slot_cmd))
     app.add_handler(CommandHandler("admin_panel", admin_panel_cmd))
 
-    # callback handlers
+    # Callback handlers:
+    # - admin callbacks
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
+    # - player rules button
     app.add_handler(CallbackQueryHandler(player_rules_cb, pattern="^player:rules$"))
-    app.add_handler(CallbackQueryHandler(player_register_cb, pattern="^player:register$"))
-
-    # Conversation: نبدأ عند ضغط زر التسجيل أو أمر /register
+    # Conversation entry: تسجيل (نوع الرصيد) — نستخدم CallbackQueryHandler كـ entry بس مرة واحدة هنا
     conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(player_register_cb, pattern="^player:register$"),
-            CommandHandler("register", register_cmd)
+            CommandHandler("register", register_cmd),
         ],
         states={
             PROOF: [MessageHandler(filters.TEXT & ~filters.COMMAND, proof_received)],
         },
         fallbacks=[],
-        allow_reentry=True
+        allow_reentry=True,
     )
     app.add_handler(conv)
 
-    # جمع بيانات الكلان (تعمل فقط للمستخدمين في collecting)
+    # جمع بيانات الكلان (رسائل عادية للمستخدمين في collecting)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_handler))
 
-    # ابدأ البوت
     print("Bot is running...")
     app.run_polling(drop_pending_updates=True)
 
