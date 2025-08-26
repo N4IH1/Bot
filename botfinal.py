@@ -1,4 +1,5 @@
-# botfinal.py
+# botfinal.py - النسخة النهائية الكاملة
+
 import os
 import json
 import logging
@@ -45,7 +46,7 @@ is_open: bool = False
 # Conversation states
 PROOF = 0
 
-# مكافحة نقر/تحديث مكرر
+# مكافحة تكرار الضغط على الأزرار
 SEEN_CALLBACK_IDS = deque(maxlen=1000)
 
 # لوغ
@@ -89,7 +90,8 @@ def kb_player_home():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📜 القوانين", callback_data="player:rules")],
         [InlineKeyboardButton("📝 التسجيل", callback_data="player:register")],
-        [InlineKeyboardButton("📢 قناة الفاينل", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]
+        [InlineKeyboardButton("📢 قناة الفاينل", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")],
+        [InlineKeyboardButton("/start", callback_data="player:start")]  # زر دائم
     ])
 
 def kb_admin_home():
@@ -98,7 +100,8 @@ def kb_admin_home():
          InlineKeyboardButton("🔴 إغلاق التسجيل", callback_data="admin:close")],
         [InlineKeyboardButton("📥 الطلبات المعلقة", callback_data="admin:view_pending")],
         [InlineKeyboardButton("📋 عرض اللستة", callback_data="admin:view_teams")],
-        [InlineKeyboardButton("📣 نشر اللستة الآن", callback_data="admin:publish")]
+        [InlineKeyboardButton("📣 نشر اللستة الآن", callback_data="admin:publish")],
+        [InlineKeyboardButton("/start", callback_data="player:start")]  # زر دائم
     ])
 
 def admin_action_buttons(user_id: int):
@@ -173,7 +176,6 @@ def is_duplicate_callback(callback_id: str) -> bool:
     return False
 
 def normalize_wallet(txt: str) -> str:
-    """يحاول تحويل النص إلى واحدة من: زين / أثير / آسيا سيل"""
     t = (txt or "").strip().lower().replace(" ", "")
     zain = {"زين", "زينكاش", "zain", "zaincash", "zain-cash", "zaincashh"}
     athe = {"أثير", "اثير", "atheir", "athe er", "atheeer", "atheir", "athe"}
@@ -216,7 +218,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await try_send_sticker(context, update.effective_chat.id, STICKER_ADMIN if is_admin else STICKER_WELCOME)
 
 # ==============================
-# Player buttons
+# أزرار اللاعبين
 # ==============================
 async def player_rules_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -256,7 +258,7 @@ async def register_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PROOF
 
 # ==============================
-# استقبال نوع الرصيد
+# استقبال الرصيد
 # ==============================
 async def proof_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global pending_payments
@@ -304,7 +306,37 @@ async def proof_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==============================
-# Admin buttons & actions
+# أوامر حالة
+# ==============================
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"📊 الحالة: {'🟢 مفتوح' if is_open else '🔴 مغلق'}\n"
+        f"عدد الفرق: {len(teams)} / {MAX_TEAMS}"
+    )
+
+async def my_slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    for e in teams:
+        if e["user_id"] == user.id:
+            await update.message.reply_text(
+                f"📍 موقع فريقك: {e['slot']} — {e['clan']} | {e['tag']} | {e['country']}"
+            )
+            return
+    await update.message.reply_text("ℹ️ لم تُسجّل في اللستة الحالية.")
+
+async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(RULES_TEXT(), parse_mode="Markdown")
+
+async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_CHAT_ID:
+        await update.message.reply_text("هذا الأمر مخصّص للأدمن فقط.")
+        return
+    await update.message.reply_text("لوحة تحكم الأدمن:", reply_markup=kb_admin_home())
+    await try_send_sticker(context, update.effective_chat.id, STICKER_ADMIN)
+
+# ==============================
+# أزرار الأدمن
 # ==============================
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -410,7 +442,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text("⚠️ إجراء غير معروف.")
 
 # ==============================
-# جمع بيانات الكلان
+# جمع بيانات الكلان بعد قبول الأدمن
 # ==============================
 async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -438,12 +470,12 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         collecting[uid]["tag"] = text
         collecting[uid]["stage"] = "country"
         save_all()
-        await update.message.reply_text("🏳️ الآن أرسل *العلم* فقط (مثال: 🇮🇶).", parse_mode="Markdown")
+        await update.message.reply_text("🏳️ الآن أرسل *الدولة/العلم* (إيموجي 🇮🇶).", parse_mode="Markdown")
         return
 
     if stage == "country":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *العلم* نصًّا.")
+            await update.message.reply_text("🙁 رجاءً أرسل *الدولة/العلم* نصًّا.")
             return
 
         collecting[uid]["country"] = text
@@ -496,36 +528,6 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # ==============================
-# أوامر حالة
-# ==============================
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"📊 الحالة: {'🟢 مفتوح' if is_open else '🔴 مغلق'}\n"
-        f"عدد الفرق: {len(teams)} / {MAX_TEAMS}"
-    )
-
-async def my_slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    for e in teams:
-        if e["user_id"] == user.id:
-            await update.message.reply_text(
-                f"📍 موقع فريقك: {e['slot']} — {e['clan']} | {e['tag']} | {e['country']}"
-            )
-            return
-    await update.message.reply_text("ℹ️ لم تُسجّل في اللستة الحالية.")
-
-async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(RULES_TEXT(), parse_mode="Markdown")
-
-async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id != ADMIN_CHAT_ID:
-        await update.message.reply_text("هذا الأمر مخصّص للأدمن فقط.")
-        return
-    await update.message.reply_text("لوحة تحكم الأدمن:", reply_markup=kb_admin_home())
-    await try_send_sticker(context, update.effective_chat.id, STICKER_ADMIN)
-
-# ==============================
 # تشغيل البوت
 # ==============================
 def main():
@@ -536,14 +538,12 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # أوامر عامة
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("rules", rules_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("my_slot", my_slot_cmd))
     app.add_handler(CommandHandler("admin_panel", admin_panel_cmd))
 
-    # Conversation لإثبات نوع الرصيد
     conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(player_register_cb, pattern="^player:register$"),
@@ -557,13 +557,8 @@ def main():
     )
     app.add_handler(conv)
 
-    # أزرار اللاعب الأخرى
     app.add_handler(CallbackQueryHandler(player_rules_cb, pattern="^player:rules$"))
-
-    # أزرار الأدمن
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
-
-    # جمع بيانات الكلان/التاغ/الدولة
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_handler))
 
     print("Bot is running...")
