@@ -96,7 +96,7 @@ WELCOME_PLAYER = (
     "🔥 *أهلًا بيك بـ RAGEBACK ESPORT — Finals Manager* 🔥\n\n"
     "هنا تكمّل تسجيل فريقك للفاينلات بطريقة سهلة وسريعة:\n"
     "1) اطّلع على القوانين\n"
-    "2) سجل فريقك وأرسل نوع الرصيد (زين / أثير / آسيا سيل)\n"
+    "2) سجل فريقك وأرسل نوع الرصيد (زين / آسيا سيل) ثم رقم البطاقة\n"
     "3) انتظر موافقة الإدارة ثم أكمل بيانات الكلان\n\n"
     "خلّك محترف 👑… وخلّي فريقك يتصدّر اللستة!\n"
 )
@@ -112,7 +112,7 @@ RULES_TEXT = lambda: (
     "• الحد الأدنى لمستوى الحساب: *50*\n"
     "• الاحترام واجب — لا سب أو شتم\n"
     "• الحد الأدنى لحجم الفريق: *3 لاعبين*\n"
-    "• دفع رسوم التسجيل (رصيد محلي: زين / أثير / آسيا سيل)\n"
+    "• دفع رسوم التسجيل (رصيد محلي: زين / آسيا سيل)\n"
     f"• كل فاينل يقبل حتى *{MAX_TEAMS}* فريقاً\n\n"
     "✅ التزم بالقوانين وتمنّى التوفيق لفريقك!"
 )
@@ -151,14 +151,11 @@ async def try_send_sticker(context: ContextTypes.DEFAULT_TYPE, chat_id: int, sti
 def normalize_wallet(txt: str) -> str:
     t = (txt or "").strip().lower().replace(" ", "")
     zain = {"زين", "زينكاش", "zain", "zaincash"}
-    athe = {"أثير", "اثير", "atheir", "athe"}
-    asia = {"آسيا سيل", "آسياسيل", "asiacell", "asia-cell", "asia"}
+    asia = {"اسيا", "آسياسيل", "asiacell", "asia-cell", "asia"}
     if t in zain:
         return "زين"
-    if t in athe:
-        return "أثير"
     if t in asia:
-        return "آسيا سيل"
+        return "اسيا"
     return ""
 
 # ==============================
@@ -206,69 +203,68 @@ async def player_register_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     await q.message.reply_text(
         "🔔 *خطوة تسجيل الرصيد*\n\n"
-        "أرسل الآن نوع الرصيد فقط: *زين* أو *أثير* أو *آسيا سيل*.\n"
+        "أرسل الآن نوع الرصيد فقط: *زين* أو *اسيا*.\n"
         "بعد الإرسال سيصلك إشعار من الإدارة بالموافقة أو الرفض.",
         parse_mode="Markdown"
     )
     return PROOF
 
-async def register_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global is_open
-    if not is_open:
-        await update.message.reply_text("⚠️ التسجيل مغلق الآن.")
-        return ConversationHandler.END
-    await update.message.reply_text(
-        "🔔 *أرسل نوع الرصيد الآن* (زين / أثير / آسيا سيل).",
-        parse_mode="Markdown"
-    )
-    return PROOF
-
 # ==============================
-# استقبال نوع الرصيد
+# استقبال نوع الرصيد + رقم البطاقة
 # ==============================
 async def proof_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global pending_payments
+    global pending_payments, collecting
     user = update.effective_user
-    if not is_open:
-        await update.message.reply_text("⚠️ التسجيل مغلق الآن.")
-        return ConversationHandler.END
+    uid = str(user.id)
 
-    wallet_raw = (update.message.text or "").strip()
-    wallet = normalize_wallet(wallet_raw)
+    text = (update.message.text or "").strip()
+    stage = collecting.get(uid, {}).get("stage")
 
-    if not wallet:
-        await update.message.reply_text("⚠️ الرجاء إرسال نوع الرصيد الصحيح: زين / أثير / آسيا سيل")
+    if not stage:
+        # بدء عملية جديدة
+        wallet = normalize_wallet(text)
+        if not wallet:
+            await update.message.reply_text("⚠️ الرجاء إرسال نوع الرصيد الصحيح: زين أواسيا")
+            return PROOF
+        collecting[uid] = {"stage": "number", "wallet": wallet}
+        await update.message.reply_text(f"✳️ نوع الرصيد مسجل: *{wallet}*\nالآن أرسل رقم البطاقة.", parse_mode="Markdown")
         return PROOF
 
-    pending_payments[str(user.id)] = {
-        "proof": wallet,
-        "type": wallet,
-        "username": user.username or user.first_name
-    }
-    save_all()
+    elif stage == "number":
+        # استلام رقم البطاقة
+        wallet = collecting[uid]["wallet"]
+        card_number = text
+        pending_payments[uid] = {
+            "type": wallet,
+            "card": card_number,
+            "username": user.username or user.first_name
+        }
+        collecting.pop(uid, None)
+        save_all()
 
-    await update.message.reply_text("✅ تم إرسال طلبك للإدارة. انتظر الموافقة.")
+        await update.message.reply_text("✅ تم إرسال طلبك للإدارة. انتظر الموافقة.")
 
-    admin_msg = (
-        f"📥 *طلب تسجيل جديد*\n\n"
-        f"من: @{user.username or user.first_name}\n"
-        f"UserID: `{user.id}`\n\n"
-        f"نوع الرصيد: *{wallet}*"
-    )
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_msg,
-            parse_mode="Markdown",
-            reply_markup=admin_action_buttons(user.id)
+        # رسالة للأدمن
+        admin_msg = (
+            f"📥 *طلب تسجيل جديد*\n\n"
+            f"من: @{user.username or user.first_name}\n"
+            f"UserID: `{uid}`\n\n"
+            f"نوع الرصيد: *{wallet}*\n"
+            f"رقم البطاقة: `{card_number}`"
         )
-    except Exception:
-        logger.exception("Failed to notify admin about payment")
-
-    return ConversationHandler.END
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=admin_msg,
+                parse_mode="Markdown",
+                reply_markup=admin_action_buttons(uid)
+            )
+        except Exception:
+            logger.exception("Failed to notify admin about payment")
+        return ConversationHandler.END
 
 # ==============================
-# أزرار الأدمن
+# أزرار الأدمن + جمع بيانات الكلان بعد قبول الأدمن
 # ==============================
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -352,11 +348,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(f"❌ تم رفض طلب UserID: {target_id}.")
             return
 
-        # قبول
+        # قبول الطلب
         try:
-            await context.bot.send_message(chat_id=int(target_id),
-                                           text="✅ تم قبول نوع الرصيد. أرسل *اسم الكلان الرسمي* الآن.",
-                                           parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=int(target_id),
+                text="✅ تم قبول الرصيد. الآن أرسل *اسم الكلان الرسمي*.",
+                parse_mode="Markdown"
+            )
         except Exception:
             logger.exception("Failed to send accept message to user")
         collecting[str(target_id)] = {"stage": "clan"}
@@ -385,97 +383,68 @@ async def collect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         collecting[uid]["clan"] = text
         collecting[uid]["stage"] = "tag"
-        save_all()
-        await update.message.reply_text("✳️ تمام! الآن أرسل *التاغ (Tag)* للكلان (مثال: RBG).", parse_mode="Markdown")
+        await update.message.reply_text("✳️ تم تسجيل اسم الكلان. الآن أرسل *التاج الرسمي* للفريق.")
         return
 
     if stage == "tag":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *التاغ* نصًّا.")
+            await update.message.reply_text("🙁 رجاءً أرسل *تاج الفريق* نصًّا.")
             return
         collecting[uid]["tag"] = text
         collecting[uid]["stage"] = "country"
-        save_all()
-        await update.message.reply_text("🏳️ الآن أرسل *الدولة/العلم* (إيموجي 🇮🇶 فقط).", parse_mode="Markdown")
+        await update.message.reply_text("✳️ تم تسجيل التاج. الآن أرسل *اسم الدولة* للفريق.")
         return
 
     if stage == "country":
         if not text:
-            await update.message.reply_text("🙁 رجاءً أرسل *الدولة/العلم* نصًّا.")
+            await update.message.reply_text("🙁 رجاءً أرسل *اسم الدولة* نصًّا.")
             return
-
         collecting[uid]["country"] = text
 
-        if len(teams) >= MAX_TEAMS:
-            collecting.pop(uid, None)
-            save_all()
-            await update.message.reply_text("⚠️ آسف، العدد اكتمل وما نكدر نضيف فريقك الآن.")
-            return
-
+        # تسجيل الفريق في اللستة
         slot = len(teams) + 1
-        entry = {
-            "user_id": int(uid),
+        new_team = {
+            "slot": slot,
+            "user_id": uid,
             "username": user.username or user.first_name,
-            "clan": collecting[uid].get("clan"),
-            "tag": collecting[uid].get("tag"),
-            "country": collecting[uid].get("country"),
-            "slot": slot
+            "clan": collecting[uid]["clan"],
+            "tag": collecting[uid]["tag"],
+            "country": collecting[uid]["country"]
         }
-        teams.append(entry)
+        teams.append(new_team)
         collecting.pop(uid, None)
         save_all()
-
-        await update.message.reply_text(
-            f"✅ تم تسجيل فريقك! موقعك في اللستة: *{slot}*.\n"
-            "🔥 بالتوفيق! لا تنس تتابع القناة للمستجدات.",
-            parse_mode="Markdown"
-        )
-
-        list_text = build_list_text()
-        for e in teams:
-            try:
-                await context.bot.send_message(chat_id=e["user_id"], text=list_text, parse_mode="Markdown")
-            except Exception:
-                logger.exception(f"Failed to notify user {e['user_id']} about updated list")
-
-        if len(teams) >= MAX_TEAMS:
-            global is_open
-            is_open = False
-            save_all()
-            try:
-                final_text = "*✅ الاكتفاء: تم إغلاق التسجيل — اللستة النهائية*\n\n" + build_list_text()
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text, parse_mode="Markdown")
-            except Exception:
-                logger.exception("Failed to publish final list to channel")
+        await update.message.reply_text(f"✅ تم تسجيل فريقك بنجاح في اللستة. رقم الفريق: {slot}")
+        return
 
 # ==============================
-# Main
+# إعداد التطبيق
 # ==============================
 def main():
     load_all()
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Commands
     app.add_handler(CommandHandler("start", start_cmd))
 
-    # Conversation for proof/registration
-    conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(player_register_cb, pattern="^player:register$")],
-        states={PROOF: [MessageHandler(filters.TEXT & ~filters.COMMAND, proof_received)]},
+    # أزرار الأدمن
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
+    # أزرار اللاعب
+    app.add_handler(CallbackQueryHandler(player_rules_cb, pattern="^player:rules$"))
+    app.add_handler(CallbackQueryHandler(player_register_cb, pattern="^player:register$"))
+
+    # استقبال الرسائل
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.TEXT & (~filters.COMMAND), proof_received)],
+        states={
+            PROOF: [MessageHandler(filters.TEXT & (~filters.COMMAND), proof_received)],
+        },
         fallbacks=[]
     )
-    app.add_handler(conv)
+    app.add_handler(conv_handler)
 
-    # Collect clan info
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_handler))
+    # جمع بيانات الكلان
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), collect_handler))
 
-    # Rules
-    app.add_handler(CallbackQueryHandler(player_rules_cb, pattern="^player:rules$"))
-
-    # Admin
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
-
-    # Run
     app.run_polling()
 
 if __name__ == "__main__":
